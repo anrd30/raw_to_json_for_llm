@@ -1,61 +1,44 @@
 import fitz  # PyMuPDF
 import json
-import os
+from transformers import pipeline
 import time
-import re
 
-def clean_text(text):
-# Replace multiple newlines with a single newline
-    text = re.sub(r'\n+', '\n', text)
-    # Strip extra whitespace at the start and end of lines
-    text = "\n".join(line.strip() for line in text.splitlines())
-    return text.strip()
+# Initialize summarization model (uses GPU if available)
+summarizer = pipeline("summarization", device=0)  # device=0 uses first GPU, -1 for CPU
 
-def detect_and_extract_pdf(pdf_path, output_json_path="output.json"):
-    start_time = time.time()
-    pdf_document = fitz.open(pdf_path)
+# PDF file path
+pdf_path = r"C:\Users\aniru\OneDrive\Documents\POP\Andra Pradesh\Groundnut Varieties.pdf"
 
-    pages_data = []
+# Start timer
+start_time = time.time()
 
-    print(f"Processing PDF: {pdf_path}")
-    for page_num in range(len(pdf_document)):
-        page = pdf_document[page_num]
+# Open PDF
+doc = fitz.open(pdf_path)
 
-        # Extract text
-        text = page.get_text("text").strip()
-        text = clean_text(text)
+pdf_data = []
 
-        # Detect type
-        if text:
-            page_type = "text"
-            content = text
-        else:
-            page_type = "image"
-            content = ""  # Placeholder for now
+for page_num in range(len(doc)):
+    page = doc.load_page(page_num)
+    text = page.get_text().strip()
+    
+    page_dict = {
+        "page_number": page_num + 1,
+        "type": "text" if text else "image",
+        "content": text if text else "",
+        "summary": None
+    }
+    
+    # Only summarize if text exists
+    if text:
+        summary_result = summarizer(text, max_length=150, min_length=40, do_sample=False)
+        page_dict["summary"] = summary_result[0]['summary_text']
 
-        # Append to list
-        pages_data.append({
-            "page_number": page_num + 1,
-            "type": page_type,
-            "content": content
-        })
+    pdf_data.append(page_dict)
 
-    # Save to JSON
-    with open(output_json_path, "w", encoding="utf-8") as json_file:
-        json.dump(pages_data, json_file, indent=2, ensure_ascii=False)
+# Save JSON
+json_path = pdf_path.replace('.pdf', '.json')
+with open(json_path, 'w', encoding='utf-8') as f:
+    json.dump(pdf_data, f, ensure_ascii=False, indent=2)
 
-    print(f"JSON saved to {output_json_path}")
-    print(f"Completed in {time.time() - start_time:.2f} seconds")
-
-# Loop through a folder of PDFs
-def process_pdf_folder(folder_path):
-    for filename in os.listdir(folder_path):
-        if filename.endswith(".pdf"):
-            pdf_path = os.path.join(folder_path, filename)
-            json_path = os.path.join(folder_path, f"{os.path.splitext(filename)[0]}.json")
-            detect_and_extract_pdf(pdf_path, json_path)
-
-# Run
-if __name__ == "__main__":
-    folder =r"C:\Users\aniru\OneDrive\Documents\POP\Andra Pradesh"# Example folder name
-    process_pdf_folder(folder)
+# Print elapsed time
+print(f"Processed {len(doc)} pages in {time.time() - start_time:.2f} seconds")
