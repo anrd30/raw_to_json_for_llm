@@ -1,13 +1,14 @@
-import os, fitz, json, time, re, unicodedata, torch
+import os, fitz, json, time, re, unicodedata, torch, argparse
 from PIL import Image
 import pytesseract
 from langdetect import detect, DetectorFactory
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 
+# -------------------------------
+# Device setup
+# -------------------------------
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
-
-
 
 DetectorFactory.seed = 0
 
@@ -24,10 +25,18 @@ lang_map = {
     "pa": "pan_Guru", "or": "ory_Orya", "en": "eng_Latn"
 }
 
+ocr_lang_map = {
+    "hi": "hin", "ta": "tam", "te": "tel", "bn": "ben",
+    "gu": "guj", "kn": "kan", "ml": "mal", "mr": "mar",
+    "pa": "pan", "or": "ori", "en": "eng"
+}
+
+# -------------------------------
+# Chunking for translation
+# -------------------------------
 def chunk_text(text, tokenizer, max_tokens=500):
     words = text.split()
-    chunks = []
-    current_chunk = []
+    chunks, current_chunk = [], []
     for word in words:
         current_chunk.append(word)
         tokenized = tokenizer(" ".join(current_chunk), return_tensors="pt", truncation=False)
@@ -54,8 +63,7 @@ def translate_chunks(chunks, src_lang="mr"):
     return " ".join(translations)
 
 def remove_redundant_sentences(text):
-    seen = set()
-    result = []
+    seen, result = set(), []
     for sentence in re.split(r'(?<=[.?!])\s+', text):
         s = sentence.strip()
         if s and s not in seen:
@@ -92,10 +100,19 @@ def clean_text(text):
     return text.strip()
 
 # -------------------------------
+# CLI Arguments
+# -------------------------------
+parser = argparse.ArgumentParser(description="Multilingual OCR PDF Processor")
+parser.add_argument("--input_folder", type=str, required=True, help="Path to folder containing PDFs")
+parser.add_argument("--lang", type=str, default=None, help="Language code (e.g., 'mr', 'hi', 'ta')")
+args = parser.parse_args()
+
+folder_path = args.input_folder
+lang_input = args.lang
+
+# -------------------------------
 # Main PDF Loop
 # -------------------------------
-folder_path = r"C:\Users\aniru\OneDrive\Documents\POP\Test\output"
-
 for filename in os.listdir(folder_path):
     if filename.lower().endswith(".pdf"):
         pdf_path = os.path.join(folder_path, filename)
@@ -107,22 +124,23 @@ for filename in os.listdir(folder_path):
 
         for page_num in range(len(doc)):
             page = doc.load_page(page_num)
-            text = page.get_text().strip()
+            pix = page.get_pixmap(dpi=300)
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
 
-            if not text:
-                pix = page.get_pixmap(dpi=300)
-                img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-                text = pytesseract.image_to_string(img, lang="mar")
-
+            # 🧠 OCR only
+            lang = lang_input if lang_input else "te"
+            text = pytesseract.image_to_string(img, lang=ocr_lang_map.get(lang, "eng"))
             text = clean_text(text)
-            lang = "te"
-            try:
-                if len(text.strip()) >= 20:
-                    lang = detect(text)
-            except:
-                lang = "te"
-            if lang not in lang_map:
-                lang = "te"
+
+            # Auto-detect if no lang provided
+            if not lang_input:
+                try:
+                    if len(text.strip()) >= 20:
+                        lang = detect(text)
+                except:
+                    lang = "te"
+                if lang not in lang_map:
+                    lang = "te"
 
             chunks = chunk_text(text, nllb_tokenizer, max_tokens=500)
             content_en = translate_chunks(chunks, src_lang=lang)
